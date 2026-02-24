@@ -1,0 +1,37 @@
+// Prisma schema defining two simple models used to persist agent runs and
+// individual test case metadata.  SQLite is the default provider for
+// quick local development; adjust the datasource to use PostgreSQL or
+// another database as required.
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model AgentRun {
+  id         String    @id @default(uuid())
+  prdText    String
+  baseUrl    String
+  status     String
+  testPlan   Json?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  testCases  TestCase[]
+}
+
+model TestCase {
+  id          String   @id @default(uuid())
+  runId       String
+  run         AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  externalId  String
+  description String
+  type        String
+  status      String
+  errorLog    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
