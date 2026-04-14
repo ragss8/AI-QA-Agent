@@ -1,0 +1,4 @@
+DROP DATABASE IF EXISTS ai_qa_agent;
+DROP ROLE IF EXISTS "Raghu";
+CREATE ROLE "Raghu" WITH LOGIN PASSWORD 'aiqatest123';
+CREATE DATABASE ai_qa_agent OWNER "Raghu";

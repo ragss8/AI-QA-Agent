@@ -1,10 +1,9 @@
 // Prisma schema defining two simple models used to persist agent runs and
-// individual test case metadata.  SQLite is the default provider for
-// quick local development; adjust the datasource to use PostgreSQL or
-// another database as required.
+// individual test case metadata. This project is configured for a local
+// PostgreSQL instance via DATABASE_URL.
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

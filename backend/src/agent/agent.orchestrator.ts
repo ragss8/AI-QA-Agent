@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import * as fs from 'fs';
+import { promises as fs } from 'fs';
 import * as path from 'path';
 import { LlmService } from '../llm/llm.service';
 import { PlaywrightRunnerService } from '../playwright/playwright-runner.service';
-import { PlannedTestCase, TestPlan, AgentStatus } from './agent.types';
+import { AgentStatus, RunStatusSnapshot, TestPlan } from './agent.types';
 
 /**
  * Coordinates the execution of an agent run.  A run consists of planning
@@ -14,6 +14,8 @@ import { PlannedTestCase, TestPlan, AgentStatus } from './agent.types';
  */
 @Injectable()
 export class AgentOrchestrator {
+  private readonly runsRoot = path.join(process.cwd(), 'runs');
+
   constructor(
     private readonly llm: LlmService,
     private readonly runner: PlaywrightRunnerService,
@@ -25,30 +27,62 @@ export class AgentOrchestrator {
    * directory under `runs` to hold artefacts for this run.
    */
   async run(runId: string, prdText: string, baseUrl: string): Promise<void> {
-    const runDir = path.join(process.cwd(), 'runs', runId);
-    fs.mkdirSync(runDir, { recursive: true });
+    const runDir = path.join(this.runsRoot, runId);
+    await fs.mkdir(runDir, { recursive: true });
+    await this.writeStatus(runDir, { status: AgentStatus.CREATED });
 
-    // Step 1: plan tests
-    const plan: TestPlan = await this.llm.generateTestPlan(prdText);
-    fs.writeFileSync(
-      path.join(runDir, 'plan.json'),
-      JSON.stringify(plan, null, 2),
-    );
+    try {
+      const plan: TestPlan = await this.llm.generateTestPlan(prdText);
+      await Promise.all([
+        fs.writeFile(path.join(runDir, 'plan.json'), JSON.stringify(plan, null, 2)),
+        this.writeStatus(runDir, { status: AgentStatus.PLANNED, plan }),
+      ]);
 
-    // Step 2: generate Playwright spec
-    let spec = `import { test, expect } from '@playwright/test';\n`;
-    for (const testCase of plan.tests) {
-      const code = await this.llm.generatePlaywrightTest(testCase, baseUrl);
-      spec += `\n${code}\n`;
+      const generatedTests = await Promise.all(
+        plan.tests.map((testCase) =>
+          this.llm.generatePlaywrightTest(testCase, baseUrl),
+        ),
+      );
+      const spec = this.buildSpecFile(generatedTests);
+
+      await Promise.all([
+        fs.writeFile(path.join(runDir, 'generated.spec.ts'), spec),
+        this.writeStatus(runDir, { status: AgentStatus.GENERATED, plan }),
+      ]);
+
+      await this.runner.run(runId);
+      await this.writeStatus(runDir, { status: AgentStatus.DONE, plan });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown agent run failure';
+      await this.writeStatus(runDir, {
+        status: AgentStatus.FAILED,
+        message,
+      });
+      throw error;
     }
-    fs.writeFileSync(path.join(runDir, 'generated.spec.ts'), spec);
+  }
 
-    // Step 3: execute tests
-    await this.runner.run(runId);
+  private buildSpecFile(generatedTests: string[]): string {
+    const sections = [`import { expect, test } from '@playwright/test';`];
 
-    // Step 4: analyse results
-    // In this simplified POC we do not parse Playwright results.  A real
-    // implementation would inspect the JSON report and call
-    // this.llm.analyseFailure() for each failure.
+    for (const generatedTest of generatedTests) {
+      const trimmed = generatedTest.trim();
+      if (trimmed) {
+        sections.push(trimmed);
+      }
+    }
+
+    return `${sections.join('\n\n')}\n`;
+  }
+
+  private async writeStatus(
+    runDir: string,
+    snapshot: RunStatusSnapshot,
+  ): Promise<void> {
+    await fs.writeFile(
+      path.join(runDir, 'status.json'),
+      JSON.stringify(snapshot, null, 2),
+    );
   }
 }

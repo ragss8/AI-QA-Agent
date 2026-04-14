@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { exec } from 'child_process';
+import { spawn } from 'child_process';
+import { promises as fs } from 'fs';
 import * as path from 'path';
 
 /**
@@ -14,29 +15,44 @@ export class PlaywrightRunnerService {
   async run(runId: string): Promise<void> {
     const runDir = path.join(process.cwd(), 'runs', runId);
     const spec = path.join(runDir, 'generated.spec.ts');
-    if (!spec.endsWith('.ts')) {
+    if (path.extname(spec) !== '.ts') {
       throw new Error('Generated spec not found');
     }
+    await fs.access(spec);
+
+    const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    const args = ['playwright', 'test', spec, '--reporter=html'];
+
+    this.logger.log(`Executing Playwright for run ${runId}`);
+
     return new Promise((resolve, reject) => {
-      const command = `npx playwright test ${spec} --reporter=html`;
-      this.logger.log(`Executing Playwright: ${command}`);
-      exec(
-        command,
-        { cwd: runDir, env: { ...process.env, CI: 'false' } },
-        (error, stdout, stderr) => {
-          if (stdout) {
-            this.logger.log(stdout);
-          }
-          if (stderr) {
-            this.logger.warn(stderr);
-          }
-          if (error) {
-            this.logger.error(`Playwright run failed: ${error.message}`);
-            return reject(error);
-          }
+      const child = spawn(command, args, {
+        cwd: runDir,
+        env: { ...process.env, CI: 'false' },
+        shell: false,
+      });
+
+      child.stdout.on('data', (chunk: Buffer | string) => {
+        this.logger.log(chunk.toString().trimEnd());
+      });
+
+      child.stderr.on('data', (chunk: Buffer | string) => {
+        this.logger.warn(chunk.toString().trimEnd());
+      });
+
+      child.on('error', (error) => {
+        this.logger.error(`Failed to start Playwright: ${error.message}`);
+        reject(error);
+      });
+
+      child.on('close', (code) => {
+        if (code === 0) {
           resolve();
-        },
-      );
+          return;
+        }
+
+        reject(new Error(`Playwright exited with code ${code ?? 'unknown'}`));
+      });
     });
   }
 }

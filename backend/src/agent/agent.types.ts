@@ -5,6 +5,7 @@
  * whether all stages completed successfully.
  */
 export enum AgentStatus {
+  UNKNOWN = 'UNKNOWN',
   CREATED = 'CREATED',
   PLANNED = 'PLANNED',
   GENERATED = 'GENERATED',
@@ -38,4 +39,10 @@ export interface PlannedTestCase {
 export interface TestPlan {
   feature: string;
   tests: PlannedTestCase[];
+}
+
+export interface RunStatusSnapshot {
+  status: AgentStatus;
+  plan?: TestPlan;
+  message?: string;
 }
