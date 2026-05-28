@@ -16,6 +16,7 @@ model AgentRun {
   prdText    String
   baseUrl    String
   status     String
+  message    String?
   testPlan   Json?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt

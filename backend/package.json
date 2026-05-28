@@ -9,7 +9,8 @@
     "build": "nest build",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "test": "echo \"No tests specified\""
+    "test": "echo \"No tests specified\"",
+    "postinstall": "playwright install"
   },
   "dependencies": {
     "@nestjs/common": "^9.3.0",
@@ -17,12 +18,12 @@
     "@nestjs/platform-express": "^9.3.0",
     "@nestjs/config": "^2.2.0",
     "@prisma/client": "^5.0.0",
-    "openai": "^4.0.0",
+    "@anthropic-ai/sdk": "^0.54.0",
+    "@playwright/test": "^1.40.0",
     "playwright": "^1.40.0",
     "prisma": "^5.0.0",
     "reflect-metadata": "^0.1.13",
-    "rxjs": "^7.8.0"
-    ,
+    "rxjs": "^7.8.0",
     "uuid": "^9.0.0"
   },
   "devDependencies": {
