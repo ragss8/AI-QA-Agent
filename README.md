@@ -37,47 +37,35 @@ ai-qa-agent/
 
 - Node.js 18+
 - npm
-- PostgreSQL installed locally on Windows
-- Optional: `OPENAI_API_KEY`
+- Required: `ANTHROPIC_API_KEY`
 
 ## Environment Files
 
-Backend env in `backend/.env`:
+Backend envs in `backend/.env.example`:
+Create a .env file by giving values of your own for the fields present in .env.example
 
-```env
-DATABASE_URL="postgresql://Raghu:aiqatest123@localhost:5432/ai_qa_agent?schema=public"
-OPENAI_API_KEY=
-PORT=3000
-```
-
-Frontend env in `frontend/.env`:
-
-```env
-VITE_API_BASE_URL=http://localhost:3000
-```
+Frontend envs in `frontend/.env.example`:
+Create a .env file by giving values of your own for the fields present in .env.example
 
 ## How To Start The Project
 
-Open three terminals from the repository root.
+### 1. Install Backend Dependencies
 
-### 1. Start PostgreSQL
+cd backend
+pnpm install
+sudo pnpm exec playwright install-deps
 
-This project uses a local PostgreSQL cluster stored in `.postgres-data/`.
+### 2. Start PostgreSQL
 
-```powershell
-& "C:\Program Files\PostgreSQL\18\bin\postgres.exe" -D ".postgres-data" -p 5432
-```
-
-Keep this terminal open while working.
+Give POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_PORT in the .env file and run 
+docker compose up -d from inside the backend directory and wait for postgres to be up
 
 ### 2. Start The Backend
 
-```powershell
-cd backend
-npm install
-npx prisma generate
+```terminal
+Give POSTGRES_HOST, ANTHROPIC_API_KEY and PORT envs and run below two commands
 npx prisma migrate dev --name init
-npm run start:dev
+pnpm run start:dev
 ```
 
 Backend URL:
@@ -88,10 +76,10 @@ http://localhost:3000
 
 ### 3. Start The Frontend
 
-```powershell
+```terminal
 cd frontend
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 Frontend URL:
@@ -125,20 +113,11 @@ curl -X POST http://localhost:3000/agent-runs \
 ## Local Database Notes
 
 - Host: `localhost`
-- Port: `5432`
-- Database: `ai_qa_agent`
-- Username: `Raghu`
-- Password: `aiqatest123`
-
-Reusable setup SQL:
-
-```text
-backend/prisma/setup-local-postgres.sql
-```
+- Port: `5432` or `5433`
 
 ## Notes
 
-- Generated run output is written under `backend/runs/`
+- Generated run output is written under `backend/runs/{runId}/`
 - The frontend reads the backend URL from `VITE_API_BASE_URL`
 - The backend reads database and OpenAI settings from `backend/.env`
 - Prisma is configured for PostgreSQL

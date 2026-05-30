@@ -1,17 +1,12 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { LlmService } from '../llm/llm.service';
 import { PlaywrightRunnerService } from '../playwright/playwright-runner.service';
-import { AgentStatus, RunStatusSnapshot, TestPlan } from './agent.types';
+import { PrismaService } from '../prisma/prisma.service';
+import { AgentStatus, TestPlan } from './agent.types';
 
-/**
- * Coordinates the execution of an agent run.  A run consists of planning
- * test cases from a requirement, generating Playwright test code, executing
- * those tests and analysing any failures.  The orchestrator persists
- * intermediate artefacts to disk so that users can inspect the plan,
- * generated code and execution reports.
- */
 @Injectable()
 export class AgentOrchestrator {
   private readonly runsRoot = path.join(process.cwd(), 'runs');
@@ -19,23 +14,36 @@ export class AgentOrchestrator {
   constructor(
     private readonly llm: LlmService,
     private readonly runner: PlaywrightRunnerService,
+    private readonly prisma: PrismaService,
   ) {}
 
-  /**
-   * Starts a new run.  The runId should be a unique identifier (UUID or
-   * timestamp) supplied by the controller.  The orchestrator creates a
-   * directory under `runs` to hold artefacts for this run.
-   */
   async run(runId: string, prdText: string, baseUrl: string): Promise<void> {
     const runDir = path.join(this.runsRoot, runId);
     await fs.mkdir(runDir, { recursive: true });
-    await this.writeStatus(runDir, { status: AgentStatus.CREATED });
+
+    await this.prisma.agentRun.create({
+      data: { id: runId, prdText, baseUrl, status: AgentStatus.CREATED },
+    });
 
     try {
       const plan: TestPlan = await this.llm.generateTestPlan(prdText);
       await Promise.all([
         fs.writeFile(path.join(runDir, 'plan.json'), JSON.stringify(plan, null, 2)),
-        this.writeStatus(runDir, { status: AgentStatus.PLANNED, plan }),
+        this.prisma.agentRun.update({
+          where: { id: runId },
+          data: {
+            status: AgentStatus.PLANNED,
+            testPlan: plan as unknown as Prisma.InputJsonValue,
+            testCases: {
+              create: plan.tests.map((tc) => ({
+                externalId: tc.id,
+                description: tc.description,
+                type: tc.type,
+                status: 'PENDING',
+              })),
+            },
+          },
+        }),
       ]);
 
       const generatedTests = await Promise.all(
@@ -47,18 +55,23 @@ export class AgentOrchestrator {
 
       await Promise.all([
         fs.writeFile(path.join(runDir, 'generated.spec.ts'), spec),
-        this.writeStatus(runDir, { status: AgentStatus.GENERATED, plan }),
+        this.prisma.agentRun.update({
+          where: { id: runId },
+          data: { status: AgentStatus.GENERATED },
+        }),
       ]);
 
       await this.runner.run(runId);
-      await this.writeStatus(runDir, { status: AgentStatus.DONE, plan });
+      await this.prisma.agentRun.update({
+        where: { id: runId },
+        data: { status: AgentStatus.DONE },
+      });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown agent run failure';
-      await this.writeStatus(runDir, {
-        status: AgentStatus.FAILED,
-        message,
-      });
+      await this.prisma.agentRun
+        .update({ where: { id: runId }, data: { status: AgentStatus.FAILED, message } })
+        .catch(() => undefined);
       throw error;
     }
   }
@@ -67,22 +80,20 @@ export class AgentOrchestrator {
     const sections = [`import { expect, test } from '@playwright/test';`];
 
     for (const generatedTest of generatedTests) {
-      const trimmed = generatedTest.trim();
-      if (trimmed) {
-        sections.push(trimmed);
+      const stripped = generatedTest
+        .split('\n')
+        .filter(
+          (line) =>
+            !line.includes("from '@playwright/test'") &&
+            !line.includes('from "@playwright/test"'),
+        )
+        .join('\n')
+        .trim();
+      if (stripped) {
+        sections.push(stripped);
       }
     }
 
     return `${sections.join('\n\n')}\n`;
-  }
-
-  private async writeStatus(
-    runDir: string,
-    snapshot: RunStatusSnapshot,
-  ): Promise<void> {
-    await fs.writeFile(
-      path.join(runDir, 'status.json'),
-      JSON.stringify(snapshot, null, 2),
-    );
   }
 }

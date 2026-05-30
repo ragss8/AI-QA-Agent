@@ -21,14 +21,22 @@ export class PlaywrightRunnerService {
     await fs.access(spec);
 
     const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    const args = ['playwright', 'test', spec, '--reporter=html'];
+    const args = [
+      'playwright', 'test', spec,
+      '--reporter=html',
+      `--output=${path.join(runDir, 'test-results')}`,
+    ];
 
     this.logger.log(`Executing Playwright for run ${runId}`);
 
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, {
-        cwd: runDir,
-        env: { ...process.env, CI: 'false' },
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CI: 'false',
+          PLAYWRIGHT_HTML_REPORT: path.join(runDir, 'playwright-report'),
+        },
         shell: false,
       });
 
@@ -46,7 +54,9 @@ export class PlaywrightRunnerService {
       });
 
       child.on('close', (code) => {
-        if (code === 0) {
+        // Code 1 means tests ran but some failed — that is a valid outcome, not an error.
+        // Codes 2+ mean Playwright itself failed to run (bad config, missing browser, etc.).
+        if (code === 0 || code === 1) {
           resolve();
           return;
         }
