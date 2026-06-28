@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { LlmService } from '../llm/llm.service';
+import { PageInspectorService } from '../page-inspector/page-inspector.service';
 import { PlaywrightRunnerService } from '../playwright/playwright-runner.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgentStatus, TestPlan } from './agent.types';
@@ -13,6 +14,7 @@ export class AgentOrchestrator {
 
   constructor(
     private readonly llm: LlmService,
+    private readonly inspector: PageInspectorService,
     private readonly runner: PlaywrightRunnerService,
     private readonly prisma: PrismaService,
   ) {}
@@ -46,12 +48,13 @@ export class AgentOrchestrator {
         }),
       ]);
 
-      const generatedTests = await Promise.all(
-        plan.tests.map((testCase) =>
-          this.llm.generatePlaywrightTest(testCase, baseUrl),
-        ),
-      );
-      const spec = this.buildSpecFile(generatedTests);
+      const pageContext = await this.inspector.inspect(baseUrl);
+      await this.prisma.agentRun.update({
+        where: { id: runId },
+        data: { status: AgentStatus.INSPECTED },
+      });
+
+      const spec = await this.llm.generatePlaywrightSpec(plan.tests, baseUrl, pageContext);
 
       await Promise.all([
         fs.writeFile(path.join(runDir, 'generated.spec.ts'), spec),
@@ -76,24 +79,4 @@ export class AgentOrchestrator {
     }
   }
 
-  private buildSpecFile(generatedTests: string[]): string {
-    const sections = [`import { expect, test } from '@playwright/test';`];
-
-    for (const generatedTest of generatedTests) {
-      const stripped = generatedTest
-        .split('\n')
-        .filter(
-          (line) =>
-            !line.includes("from '@playwright/test'") &&
-            !line.includes('from "@playwright/test"'),
-        )
-        .join('\n')
-        .trim();
-      if (stripped) {
-        sections.push(stripped);
-      }
-    }
-
-    return `${sections.join('\n\n')}\n`;
-  }
 }

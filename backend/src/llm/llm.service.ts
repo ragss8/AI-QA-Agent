@@ -6,7 +6,6 @@ import { PlannedTestCase, TestPlan } from '../agent/agent.types';
 export class LlmService {
   private readonly client: Anthropic | null;
   private readonly logger = new Logger(LlmService.name);
-  private readonly model = 'claude-opus-4-7';
 
   constructor() {
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -23,7 +22,7 @@ export class LlmService {
       throw new Error('LLM unavailable – ANTHROPIC_API_KEY is not configured');
     }
     const response = await this.client.messages.create({
-      model: this.model,
+      model: 'claude-sonnet-4-6',
       max_tokens: 4096,
       system:
         'You are a senior QA engineer. Read the following product requirement and return a structured test plan with a feature name and a list of test cases. Each test case must have a unique id, a concise description, and a type (happy, negative, or edge).',
@@ -67,22 +66,23 @@ export class LlmService {
     };
   }
 
-  async generatePlaywrightTest(
-    testCase: PlannedTestCase,
+  async generatePlaywrightSpec(
+    testCases: PlannedTestCase[],
     baseUrl: string,
+    pageContext: string,
   ): Promise<string> {
     if (!this.client) {
       throw new Error('LLM unavailable – ANTHROPIC_API_KEY is not configured');
     }
     const response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: 4096,
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
       system:
-        'You are a QA automation engineer. Generate a Playwright TypeScript test using the given test case object and base URL. Use only the Playwright API (test, page, expect). Do not include backticks or markdown code fences. The result must compile as TypeScript.',
+        "You are a QA automation engineer. Generate a complete Playwright TypeScript spec file for all the given test cases. Begin with exactly one import line: import { test, expect } from '@playwright/test'; Do not add any other imports. Write minimal, concise code with no inline comments. The file must compile as TypeScript. Do not include backticks or markdown code fences. Use only the exact selectors visible in the provided page HTML — do not guess or invent selectors.",
       messages: [
         {
           role: 'user',
-          content: `Test case: ${JSON.stringify(testCase)}\nBase URL: ${baseUrl}`,
+          content: `Base URL: ${baseUrl}\n\nActual page HTML (use these exact selectors):\n${pageContext}\n\nTest cases:\n${JSON.stringify(testCases, null, 2)}`,
         },
       ],
     });
@@ -99,8 +99,8 @@ export class LlmService {
       throw new Error('LLM unavailable – ANTHROPIC_API_KEY is not configured');
     }
     const response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: 4096,
+      model: 'claude-sonnet-4-6',
+      max_tokens: 512,
       system:
         'You are a QA lead. Analyse the following Playwright error log and classify the failure as APPLICATION_BUG, TEST_FLAKE, or SELECTOR_ISSUE. Provide a one-sentence summary explaining the reason.',
       messages: [
