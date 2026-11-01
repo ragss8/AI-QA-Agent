@@ -2,6 +2,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
 import { PlannedTestCase, TestPlan } from '../agent/agent.types';
 
+const REASONING_MODEL = 'claude-sonnet-4-6';
+const CODEGEN_MODEL = 'claude-haiku-4-5';
+
+export interface FailureAnalysis {
+  classification: 'APPLICATION_BUG' | 'TEST_FLAKE' | 'SELECTOR_ISSUE';
+  summary: string;
+}
+
 @Injectable()
 export class LlmService {
   private readonly client: Anthropic | null;
@@ -18,11 +26,8 @@ export class LlmService {
   }
 
   async generateTestPlan(prdText: string): Promise<TestPlan> {
-    if (!this.client) {
-      throw new Error('LLM unavailable – ANTHROPIC_API_KEY is not configured');
-    }
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-6',
+    const response = await this.requireClient().messages.create({
+      model: REASONING_MODEL,
       max_tokens: 4096,
       system:
         'You are a senior QA engineer. Read the following product requirement and return a structured test plan with a feature name and a list of test cases. Each test case must have a unique id, a concise description, and a type (happy, negative, or edge).',
@@ -55,15 +60,7 @@ export class LlmService {
       tool_choice: { type: 'tool', name: 'submit_test_plan' },
     });
 
-    const toolBlock = response.content.find((b) => b.type === 'tool_use');
-    if (!toolBlock || toolBlock.type !== 'tool_use') {
-      throw new Error('LLM did not return a tool use block');
-    }
-    const raw = toolBlock.input as Record<string, unknown>;
-    return {
-      feature: raw.feature as string,
-      tests: ((raw.tests ?? raw.testCases ?? raw.test_cases ?? []) as PlannedTestCase[]),
-    };
+    return this.toolInput<TestPlan>(response, 'a test plan');
   }
 
   async generatePlaywrightSpec(
@@ -71,11 +68,8 @@ export class LlmService {
     baseUrl: string,
     pageContext: string,
   ): Promise<string> {
-    if (!this.client) {
-      throw new Error('LLM unavailable – ANTHROPIC_API_KEY is not configured');
-    }
-    const response = await this.client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const response = await this.requireClient().messages.create({
+      model: CODEGEN_MODEL,
       max_tokens: 8192,
       system:
         "You are a QA automation engineer. Generate a complete Playwright TypeScript spec file for all the given test cases. Begin with exactly one import line: import { test, expect } from '@playwright/test'; Do not add any other imports. Write minimal, concise code with no inline comments. The file must compile as TypeScript. Do not include backticks or markdown code fences. Use only the exact selectors visible in the provided page HTML — do not guess or invent selectors.",
@@ -88,18 +82,19 @@ export class LlmService {
     });
 
     const textBlock = response.content.find((b) => b.type === 'text');
-    return textBlock?.type === 'text' ? textBlock.text.trim() : '';
+    const spec = textBlock?.type === 'text' ? textBlock.text.trim() : '';
+    if (!spec) {
+      throw new Error('LLM did not return a Playwright spec');
+    }
+    return spec;
   }
 
   async analyseFailure(
     testCase: PlannedTestCase,
     errorLog: string,
-  ): Promise<{ classification: string; summary: string }> {
-    if (!this.client) {
-      throw new Error('LLM unavailable – ANTHROPIC_API_KEY is not configured');
-    }
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-6',
+  ): Promise<FailureAnalysis> {
+    const response = await this.requireClient().messages.create({
+      model: REASONING_MODEL,
       max_tokens: 512,
       system:
         'You are a QA lead. Analyse the following Playwright error log and classify the failure as APPLICATION_BUG, TEST_FLAKE, or SELECTOR_ISSUE. Provide a one-sentence summary explaining the reason.',
@@ -129,10 +124,22 @@ export class LlmService {
       tool_choice: { type: 'tool', name: 'submit_failure_analysis' },
     });
 
-    const toolBlock = response.content.find((b) => b.type === 'tool_use');
-    if (!toolBlock || toolBlock.type !== 'tool_use') {
-      throw new Error('LLM did not return a failure analysis');
+    return this.toolInput<FailureAnalysis>(response, 'a failure analysis');
+  }
+
+  private requireClient(): Anthropic {
+    if (!this.client) {
+      throw new Error('LLM unavailable – ANTHROPIC_API_KEY is not configured');
     }
-    return toolBlock.input as { classification: string; summary: string };
+    return this.client;
+  }
+
+  // Every tool call here is forced via tool_choice, so the schema is the contract.
+  private toolInput<T>(response: Anthropic.Message, expected: string): T {
+    const block = response.content.find((b) => b.type === 'tool_use');
+    if (block?.type !== 'tool_use') {
+      throw new Error(`LLM did not return ${expected}`);
+    }
+    return block.input as T;
   }
 }

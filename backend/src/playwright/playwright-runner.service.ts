@@ -12,12 +12,8 @@ import * as path from 'path';
 export class PlaywrightRunnerService {
   private readonly logger = new Logger(PlaywrightRunnerService.name);
 
-  async run(runId: string): Promise<void> {
-    const runDir = path.join(process.cwd(), 'runs', runId);
+  async run(runId: string, runDir: string): Promise<void> {
     const spec = path.join(runDir, 'generated.spec.ts');
-    if (path.extname(spec) !== '.ts') {
-      throw new Error('Generated spec not found');
-    }
     await fs.access(spec);
 
     const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';

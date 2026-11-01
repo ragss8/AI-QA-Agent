@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { chromium } from 'playwright';
 
+// Caps how much page HTML is sent to the LLM, which is the real cost driver here.
+const MAX_CONTEXT_CHARS = 3000;
+
 @Injectable()
 export class PageInspectorService {
   private readonly logger = new Logger(PageInspectorService.name);
@@ -34,20 +37,20 @@ export class PageInspectorService {
 
     const formMatches = html.match(/<form[\s\S]*?<\/form>/gi) ?? [];
     if (formMatches.length > 0) {
-      return formMatches.join('\n').slice(0, 3000);
+      return formMatches.join('\n').slice(0, MAX_CONTEXT_CHARS);
     }
 
     const inputs = html.match(/<input[^>]*>/gi) ?? [];
     const buttons = html.match(/<button[\s\S]*?<\/button>/gi) ?? [];
     const combined = [...inputs, ...buttons].join('\n');
-    return combined.slice(0, 3000) || null;
+    return combined.slice(0, MAX_CONTEXT_CHARS) || null;
   }
 
   private async inspectWithPlaywright(url: string): Promise<string> {
     const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
 
       const formHtml = await page
         .locator('form')
@@ -57,7 +60,7 @@ export class PageInspectorService {
 
       if (formHtml) {
         this.logger.log('Extracted form HTML via Playwright');
-        return formHtml.slice(0, 3000);
+        return formHtml.slice(0, MAX_CONTEXT_CHARS);
       }
 
       const elements = await page
@@ -65,7 +68,7 @@ export class PageInspectorService {
         .evaluateAll((els) => els.map((el) => el.outerHTML).join('\n'));
 
       this.logger.log('Extracted individual form elements via Playwright');
-      return elements.slice(0, 3000);
+      return elements.slice(0, MAX_CONTEXT_CHARS);
     } finally {
       await browser.close();
     }

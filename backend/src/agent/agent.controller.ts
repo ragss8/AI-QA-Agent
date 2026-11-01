@@ -4,10 +4,11 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Logger,
   Param,
   Post,
 } from '@nestjs/common';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgentOrchestrator } from './agent.orchestrator';
 import { AgentStatus, RunStatusSnapshot, TestPlan } from './agent.types';
@@ -19,6 +20,8 @@ interface StartRunDto {
 
 @Controller('agent-runs')
 export class AgentController {
+  private readonly logger = new Logger(AgentController.name);
+
   constructor(
     private readonly orchestrator: AgentOrchestrator,
     private readonly prisma: PrismaService,
@@ -36,11 +39,12 @@ export class AgentController {
       );
     }
 
-    const runId = uuidv4();
+    const runId = randomUUID();
 
-    this.orchestrator
-      .run(runId, prdText, baseUrl)
-      .catch((error) => console.error(error));
+    // Runs are long; the client polls GET /agent-runs/:runId for progress.
+    this.orchestrator.run(runId, prdText, baseUrl).catch((error) => {
+      this.logger.error(`Run ${runId} failed`, error instanceof Error ? error.stack : error);
+    });
 
     return { runId };
   }

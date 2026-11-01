@@ -4,7 +4,10 @@ type RunStatus =
   | 'UNKNOWN'
   | 'CREATED'
   | 'PLANNED'
+  | 'INSPECTED'
   | 'GENERATED'
+  | 'EXECUTED'
+  | 'ANALYZED'
   | 'DONE'
   | 'FAILED';
 
@@ -43,7 +46,7 @@ function App() {
     }
 
     let isDisposed = false;
-    let intervalId: number | undefined;
+    let intervalId = 0;
 
     const fetchStatus = async () => {
       try {
@@ -58,10 +61,10 @@ function App() {
         }
 
         setStatus(payload);
+        setError(null);
 
-        if (TERMINAL_STATUSES.has(payload.status) && intervalId !== undefined) {
+        if (TERMINAL_STATUSES.has(payload.status)) {
           window.clearInterval(intervalId);
-          intervalId = undefined;
         }
       } catch (requestError) {
         if (!isDisposed) {
@@ -74,16 +77,15 @@ function App() {
       }
     };
 
-    void fetchStatus();
+    // Start the timer before the first fetch so an already-terminal run can clear it.
     intervalId = window.setInterval(() => {
       void fetchStatus();
     }, 2000);
+    void fetchStatus();
 
     return () => {
       isDisposed = true;
-      if (intervalId !== undefined) {
-        window.clearInterval(intervalId);
-      }
+      window.clearInterval(intervalId);
     };
   }, [runId]);
 

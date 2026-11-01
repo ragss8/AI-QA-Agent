@@ -31,52 +31,48 @@ export class AgentOrchestrator {
       const plan: TestPlan = await this.llm.generateTestPlan(prdText);
       await Promise.all([
         fs.writeFile(path.join(runDir, 'plan.json'), JSON.stringify(plan, null, 2)),
-        this.prisma.agentRun.update({
-          where: { id: runId },
-          data: {
-            status: AgentStatus.PLANNED,
-            testPlan: plan as unknown as Prisma.InputJsonValue,
-            testCases: {
-              create: plan.tests.map((tc) => ({
-                externalId: tc.id,
-                description: tc.description,
-                type: tc.type,
-                status: 'PENDING',
-              })),
-            },
+        this.setStatus(runId, AgentStatus.PLANNED, {
+          testPlan: plan as unknown as Prisma.InputJsonValue,
+          testCases: {
+            create: plan.tests.map((tc) => ({
+              externalId: tc.id,
+              description: tc.description,
+              type: tc.type,
+              status: 'PENDING',
+            })),
           },
         }),
       ]);
 
       const pageContext = await this.inspector.inspect(baseUrl);
-      await this.prisma.agentRun.update({
-        where: { id: runId },
-        data: { status: AgentStatus.INSPECTED },
-      });
+      await this.setStatus(runId, AgentStatus.INSPECTED);
 
       const spec = await this.llm.generatePlaywrightSpec(plan.tests, baseUrl, pageContext);
-
       await Promise.all([
         fs.writeFile(path.join(runDir, 'generated.spec.ts'), spec),
-        this.prisma.agentRun.update({
-          where: { id: runId },
-          data: { status: AgentStatus.GENERATED },
-        }),
+        this.setStatus(runId, AgentStatus.GENERATED),
       ]);
 
-      await this.runner.run(runId);
-      await this.prisma.agentRun.update({
-        where: { id: runId },
-        data: { status: AgentStatus.DONE },
-      });
+      await this.runner.run(runId, runDir);
+      await this.setStatus(runId, AgentStatus.DONE);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown agent run failure';
-      await this.prisma.agentRun
-        .update({ where: { id: runId }, data: { status: AgentStatus.FAILED, message } })
-        .catch(() => undefined);
+      await this.setStatus(runId, AgentStatus.FAILED, { message }).catch(
+        () => undefined,
+      );
       throw error;
     }
   }
 
+  private setStatus(
+    runId: string,
+    status: AgentStatus,
+    data: Omit<Prisma.AgentRunUpdateInput, 'status'> = {},
+  ) {
+    return this.prisma.agentRun.update({
+      where: { id: runId },
+      data: { ...data, status },
+    });
+  }
 }
