@@ -7,6 +7,7 @@ through a NestJS backend and a Vite/React frontend.
 
 ## What It Does
 
+- Runs on a local Qwen model by default, or the Anthropic API when a funded key is present
 - Accepts product requirements and a target base URL
 - Generates a test plan with happy, negative, and edge-case scenarios
 - Inspects the target page and extracts its real form markup
@@ -75,7 +76,9 @@ ai-qa-agent/
 - Node.js 18+ (the backend uses the global `fetch` and `crypto.randomUUID`)
 - pnpm
 - Docker, for the local PostgreSQL instance
-- An `ANTHROPIC_API_KEY`
+- [Ollama](https://ollama.com) with a model pulled (see below). This is the default engine.
+- `ANTHROPIC_API_KEY` — **optional**. When set and funded it is preferred; otherwise the
+  local model serves every call.
 
 ## Environment Files
 
@@ -110,7 +113,21 @@ for the container to report healthy:
 docker compose up -d
 ```
 
-### 3. Start The Backend
+### 3. Pull The Local Models
+
+```sh
+brew install ollama
+OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 ollama serve   # leave running
+
+ollama pull qwen2.5-coder:7b-instruct-q4_K_M   # 4.7 GB — writes the spec
+ollama pull qwen3:8b                           # 5.2 GB — explores and plans
+```
+
+The two environment variables shrink the KV cache, which matters on a 16 GB
+machine. If you pull only the coder, set both model variables to it and the app
+still works — see *Choosing Local Models* below.
+
+### 4. Start The Backend
 
 With `POSTGRES_HOST`, `ANTHROPIC_API_KEY`, and `PORT` also set:
 
@@ -125,7 +142,7 @@ Backend URL:
 http://localhost:3000
 ```
 
-### 4. Start The Frontend
+### 5. Start The Frontend
 
 ```sh
 cd frontend
@@ -170,13 +187,93 @@ curl http://localhost:3000/agent-runs/<runId>
 
 An unknown `runId` returns `{"status":"UNKNOWN","message":"Run not found"}`.
 
-## Models Used
+## Which Engine Serves A Run
 
-Model IDs are declared as constants at the top of
-`backend/src/llm/llm.service.ts`:
+Every LLM backend implements `LlmProvider` (`backend/src/llm/llm-provider.ts`).
+The default stack, assembled in `app.module.ts`, is:
 
-- Planning and failure analysis: `claude-sonnet-4-6`
-- Playwright code generation: `claude-haiku-4-5`
+```text
+RepairingLlmProvider( RoutingLlmProvider( AnthropicProvider, OllamaProvider ) )
+```
+
+- **Routing** prefers Anthropic while the key works. There is no API for asking
+  whether a key has credits, so failures are classified by status: 401/403 is
+  permanent, 402 and a spend-cap 429 fall back for an hour, an ordinary 429 or a
+  5xx falls back for one call, and a 400 is logged rather than treated as a
+  billing problem.
+- **Repair** re-prompts with `tsc` errors when a generated spec does not
+  compile, up to two retries. It costs nothing when the spec already compiles.
+
+Each run records the backend that served it in `AgentRun.provider` / `.model`.
+
+Model IDs are constants at the top of each provider:
+
+| Provider | Planning / analysis | Code generation |
+| -------- | ------------------- | --------------- |
+| `anthropic.provider.ts` | `claude-sonnet-4-6` | `claude-haiku-4-5` |
+| `ollama.provider.ts` | `qwen2.5-coder:7b-instruct-q4_K_M` | same |
+
+## Choosing Local Models
+
+The pipeline needs two unrelated skills, and one model is rarely good at both:
+
+| Stage | Skill | Variable |
+| ----- | ----- | -------- |
+| Explore the app, plan cases, analyse failures | agentic reasoning, tool use | `OLLAMA_REASONING_MODEL` |
+| Generate the Playwright spec | writing TypeScript | `OLLAMA_CODEGEN_MODEL` |
+
+Both fall back to `OLLAMA_MODEL`, then to the coder, so a single-model setup
+works unchanged.
+
+Measured on an M1 Pro / 16 GB with `qwen2.5-coder:7b-instruct-q4_K_M`:
+
+- **Code generation: strong.** Every spec compiled, on all six eval cases.
+- **Exploration: unreliable.** On repeat runs it chose `click` on a text input
+  instead of `fill`, failing a login it had completed minutes earlier. It is a
+  code-completion model being asked to make agentic decisions.
+
+So pair it with a general instruct model for the reasoning half. Compare
+candidates on the task the coder fails:
+
+```sh
+npx ts-node --project eval/tsconfig.json eval/compare-models.ts \
+  qwen2.5-coder:7b-instruct-q4_K_M qwen3:8b
+```
+
+### What fits in 16 GB
+
+Measured concurrently, with the model loaded at `num_ctx: 8192` and headless
+Chromium live during exploration:
+
+| Model | Weights | Model + browser | Verdict |
+| ----- | ------- | --------------- | ------- |
+| 7B `q4_K_M` | 4.7 GB | **4.79 GB** | fits, ~7 GB spare |
+| 14B `q4_K_M` | 9.0 GB | ~11.3 GB | swaps mid-run |
+| 32B / Qwen3-Coder-30B-A3B | 19–20 GB | — | exceeds total RAM |
+
+Headless Chromium is only ~0.3 GB across its processes, so the browser is not
+the problem; the model is. Two models total ~10 GB of weights, so they load
+**sequentially** rather than together — the stages are sequential anyway, and
+Ollama swaps between them. If you see swapping, lower `keep_alive` so the
+reasoning model unloads before code generation starts.
+
+## Scoring The Engines
+
+```sh
+pnpm eval                       # local model
+pnpm eval -- --provider anthropic
+pnpm eval -- --repair           # with the compile-repair loop
+pnpm eval -- --run              # also execute the specs (slow)
+```
+
+Six frozen cases under `backend/eval/`, scored objectively with no human and no
+judge model: `+1` valid plan covering all three test types, `+2` the spec
+compiles, `+2` every test passes, `-3` it used a selector absent from the page
+markup. Page markup is cached in `eval/fixtures/`, so runs are fast and offline.
+
+Two cases are marked as not memorisable — a synthetic page and a real private
+app — because scores on well-known public test sites measure recall as much as
+reasoning.
 
 ## Notes
 
@@ -198,8 +295,11 @@ This is still a local POC:
 - Generated test code is executed without sandboxing
 - `TestCase` rows are created with status `PENDING` and are never updated from
   the Playwright results, so per-test outcomes live only in the HTML report
-- `LlmService.analyseFailure` is implemented but not yet wired into the
+- `analyseFailure` is implemented on both providers but not yet wired into the
   orchestrator, so the `EXECUTED` and `ANALYZED` statuses are unused
+- The local 7B model scores well below the hosted models on code generation. It
+  reliably produces compiling specs, but invents CSS class selectors for
+  elements absent from the extracted markup (such as error banners)
 
 ## License
 

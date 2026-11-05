@@ -12,14 +12,21 @@ import * as path from 'path';
 export class PlaywrightRunnerService {
   private readonly logger = new Logger(PlaywrightRunnerService.name);
 
+  /** Path of the machine-readable report, relative to a run directory. */
+  static reportPath(runDir: string): string {
+    return path.join(runDir, 'results.json');
+  }
+
   async run(runId: string, runDir: string): Promise<void> {
     const spec = path.join(runDir, 'generated.spec.ts');
     await fs.access(spec);
 
     const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    // Two reporters: html for a human to browse, json so per-test outcomes can
+    // be read back and joined to the plan.
     const args = [
       'playwright', 'test', spec,
-      '--reporter=html',
+      '--reporter=html,json',
       `--output=${path.join(runDir, 'test-results')}`,
     ];
 
@@ -32,6 +39,7 @@ export class PlaywrightRunnerService {
           ...process.env,
           CI: 'false',
           PLAYWRIGHT_HTML_REPORT: path.join(runDir, 'playwright-report'),
+          PLAYWRIGHT_JSON_OUTPUT_NAME: PlaywrightRunnerService.reportPath(runDir),
         },
         shell: false,
       });

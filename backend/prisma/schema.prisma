@@ -17,7 +17,10 @@ model AgentRun {
   baseUrl    String
   status     String
   message    String?
+  provider   String?
+  model      String?
   testPlan   Json?
+  flowTrace  Json?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
   testCases  TestCase[]
@@ -34,4 +37,21 @@ model TestCase {
   errorLog    String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+/// Accepted (prompt, output) pairs from whichever backend served a run.
+/// While a funded API key is present these rows accumulate as a distillation
+/// corpus for fine-tuning a local model later; capture is cheap, and a corpus
+/// not collected cannot be collected retroactively.
+model LlmCallLog {
+  id        String   @id @default(uuid())
+  runId     String?
+  provider  String
+  model     String
+  kind      String
+  prompt    String
+  output    String
+  createdAt DateTime @default(now())
+
+  @@index([provider, kind])
 }

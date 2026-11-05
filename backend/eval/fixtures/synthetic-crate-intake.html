@@ -1,0 +1,20 @@
+<form id="crate-intake-form" action="/intake/submit" method="post">
+  <label for="consignmentRef">Consignment reference</label>
+  <input type="text" name="consignmentRef" id="consignmentRef" maxlength="12" />
+
+  <label for="palletCount">Pallet count</label>
+  <input type="number" name="palletCount" id="palletCount" min="1" max="48" />
+
+  <label for="bondedDepot">Bonded depot</label>
+  <select name="bondedDepot" id="bondedDepot">
+    <option value="">Choose a depot</option>
+    <option value="GRM-04">Grimsby 04</option>
+    <option value="THS-11">Thurrock 11</option>
+  </select>
+
+  <label for="perishable">Perishable consignment</label>
+  <input type="checkbox" name="perishable" id="perishable" />
+
+  <button class="intake-submit" type="submit">Log intake</button>
+  <p id="intakeOutcome" class="outcome-banner"></p>
+</form>

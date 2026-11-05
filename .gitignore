@@ -21,6 +21,7 @@ pnpm-debug.log*
 # Runtime artifacts
 backend/runs/
 playwright-report/
+test-results/
 .postgres-data/
 .pg-superuser-password
 

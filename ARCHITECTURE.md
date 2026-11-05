@@ -75,25 +75,26 @@ does every database status write, so there is one place that touches
 `AgentRun`. It also owns the `runsRoot` path and passes `runDir` down to the
 Playwright runner, so only this file knows where run artifacts live.
 
-#### [`backend/src/llm/llm.service.ts`](backend/src/llm/llm.service.ts)
+#### [`backend/src/llm/`](backend/src/llm/) — the provider stack
 
-Every Anthropic API call in the project. Three public methods:
+No single file owns LLM access any more. Every backend implements the same
+abstract contract, and wrappers compose on top of it:
 
-| Method                    | Model (constant at top of file) | Returns                            |
-| ------------------------- | ------------------------------- | ---------------------------------- |
-| `generateTestPlan`        | `REASONING_MODEL` (Sonnet)      | `TestPlan` — feature + test cases  |
-| `generatePlaywrightSpec`  | `CODEGEN_MODEL` (Haiku)         | TypeScript source as a string      |
-| `analyseFailure`          | `REASONING_MODEL` (Sonnet)      | `FailureAnalysis`                  |
+| File | Role |
+| ---- | ---- |
+| [`llm-provider.ts`](backend/src/llm/llm-provider.ts) | **The contract.** An abstract class (not an interface — Nest needs a runtime injection token). Also holds the shared JSON schemas and system prompts, so both backends constrain output identically. |
+| [`anthropic.provider.ts`](backend/src/llm/anthropic.provider.ts) | Hosted. Forces a tool call via `tool_choice` so the schema is guaranteed. Constructed with `maxRetries: 0` so the router fails over instantly. |
+| [`ollama.provider.ts`](backend/src/llm/ollama.provider.ts) | Local. Uses Ollama's `format` for schema-constrained decoding — the sampler enforces the schema, so malformed JSON is impossible. Sets `num_ctx: 8192` because Ollama defaults to 4096 and truncates silently. |
+| [`routing.provider.ts`](backend/src/llm/routing.provider.ts) | Picks a backend. Prefers Anthropic, classifies failures by HTTP status, and caches the verdict with a cooldown instead of probing per call. |
+| [`repairing.provider.ts`](backend/src/llm/repairing.provider.ts) | Decorator. Re-prompts with `tsc` errors when a spec fails to compile, max two retries. Free when the spec already compiles. |
+| [`typescript-check.ts`](backend/src/llm/typescript-check.ts) | `checkSpecCompiles()` and `ungroundedSelectors()` — used by both the repair loop and the eval. |
 
-The two structured methods force a tool call via `tool_choice`, so the JSON
-schema is the contract rather than a hope. Two private helpers remove the
-duplication: `requireClient()` throws a single clear error when
-`ANTHROPIC_API_KEY` is missing, and `toolInput<T>()` pulls the `tool_use` block
-out of the response. If the key is absent the service constructs fine and only
-throws when a method is actually called, which is why the server still boots
-without a key.
+The three methods on the contract are `generateTestPlan`,
+`generatePlaywrightSpec` and `analyseFailure`. The stack is assembled in
+`app.module.ts` via `useFactory`; `servedBy` reports the concrete backend
+through the wrappers, which is what gets persisted on the run.
 
-> `analyseFailure` has no callers yet. See *Loose ends* below.
+> `analyseFailure` still has no callers. See *Loose ends* below.
 
 #### [`backend/src/page-inspector/page-inspector.service.ts`](backend/src/page-inspector/page-inspector.service.ts)
 
@@ -116,6 +117,7 @@ gone before the LLM call runs.
 | [`backend/src/agent/agent.controller.ts`](backend/src/agent/agent.controller.ts) | The only HTTP surface. `POST /agent-runs` trims and validates `prdText` + `baseUrl` (400 if either is missing), mints a `runId` with `crypto.randomUUID()`, fires the orchestrator without awaiting it, and returns the id. `GET /agent-runs/:runId` reads the row and returns a `RunStatusSnapshot`, or `UNKNOWN` if there is no such run. |
 | [`backend/src/agent/agent.types.ts`](backend/src/agent/agent.types.ts) | Shared vocabulary, no logic: the `AgentStatus` enum (the run lifecycle), `TestType`, `PlannedTestCase`, `TestPlan`, and `RunStatusSnapshot` (the GET response shape). Read this file second — it defines the states everything else moves between. |
 | [`backend/src/playwright/playwright-runner.service.ts`](backend/src/playwright/playwright-runner.service.ts) | Spawns `npx playwright test <spec>` as a child process in the given `runDir`, piping stdout/stderr into the Nest logger. Treats exit code 0 **and 1** as success, because 1 means "tests ran, some failed" — a valid QA outcome. Codes 2+ mean Playwright itself broke and reject. |
+| [`backend/eval/`](backend/eval/) | The scoring harness. `cases.ts` holds six frozen cases, `fixtures/` their cached page markup, `run.ts` the scorer, `router-check.ts` an assert-based self-test of the routing decisions. Excluded from the app build; has its own `tsconfig.json`. |
 | [`backend/src/prisma/prisma.service.ts`](backend/src/prisma/prisma.service.ts) | Nine lines. Extends `PrismaClient` and connects on `onModuleInit` so Nest can inject the database client. |
 | [`backend/src/app.module.ts`](backend/src/app.module.ts) | Wires the one controller and five providers into Nest's DI container, and loads `.env` globally. The place to register anything new. |
 | [`backend/src/main.ts`](backend/src/main.ts) | Bootstrap: creates the Nest app, enables CORS (required — the frontend is on a different port), listens on `PORT` or 3000. |
@@ -124,7 +126,7 @@ gone before the LLM call runs.
 
 | File | What it does |
 | ---- | ------------ |
-| [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma) | Two models. `AgentRun` is the run itself: `prdText`, `baseUrl`, `status`, optional `message`, and `testPlan` as JSON. `TestCase` is one planned scenario, with `onDelete: Cascade` from its run. |
+| [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma) | Three models. `AgentRun` is the run itself, including `provider` and `model` recording which engine served it. `TestCase` is one planned scenario, with `onDelete: Cascade`. `LlmCallLog` stores accepted prompt/output pairs as a distillation corpus for fine-tuning a local model later. |
 | [`backend/prisma/migrations/`](backend/prisma/migrations/) | One migration, `20260527194650_init`, creating both tables and the foreign key. Applied with `pnpm prisma:migrate`. |
 
 ### Backend config
@@ -202,7 +204,10 @@ Things a newcomer would otherwise waste time discovering:
 
 | Task | File to open |
 | ---- | ------------ |
-| Change a prompt or swap models | `backend/src/llm/llm.service.ts` |
+| Change a shared prompt or schema | `backend/src/llm/llm-provider.ts` |
+| Swap a model id | `anthropic.provider.ts` or `ollama.provider.ts` |
+| Change the fallback rules | `backend/src/llm/routing.provider.ts` |
+| Add an eval case | `backend/eval/cases.ts` + a fixture |
 | Add or reorder a run stage | `backend/src/agent/agent.orchestrator.ts` |
 | Add an API endpoint | `backend/src/agent/agent.controller.ts` |
 | Add a lifecycle status | `backend/src/agent/agent.types.ts`, then `App.tsx` |
